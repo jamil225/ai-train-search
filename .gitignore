@@ -1,0 +1,10 @@
+.DS_Store
+TrainSearch/.gradle/
+TrainSearch/build/
+TrainSearch/app/build/
+TrainSearch/local.properties
+.idea/
+*.apk
+apk_backups/
+vendor/
+.claude/
