@@ -53,13 +53,14 @@
 flowchart TD
     User["🗣️ Spoken Voice or Typed Query<br/>'Ajmer, Jaipur, Jodhpur to Pune 1 Sep sleeper'"] --> Parser["🤖 OpenAI gpt-4o-mini (Llm.kt)"]
     
-    Parser -->|Structured JSON| Query["📋 TripQuery(origin, destination, dates, classes)"]
+    Parser -->|"Structured JSON"| Query["📋 TripQuery(origin, destination, dates, classes)"]
     Query --> Resolver["📍 Station Resolver (Stations.kt)"]
     
-    Resolver -->|Station Codes ['AII', 'JP', 'KSG', 'JU'] -> ['PUNE']| ConfirmTkt["⚡ ConfirmTkt Real-Time API (ConfirmTkt.kt)"]
+    Resolver -->|"Station Codes (AII, JP, KSG, JU -> PUNE)"| ConfirmTkt["⚡ ConfirmTkt Real-Time API (ConfirmTkt.kt)"]
     
-    ConfirmTkt -->|Live Snapshots| Ranker["⚡ Scoring & Ranking Engine (Ranking.kt)"]
-    Ranker -->|AVL > RAC > WL| UI["📱 Jetpack Compose Station Board (BoardScreen.kt)"]
+    ConfirmTkt -->|"Live Snapshots"| Ranker["⚡ Scoring & Ranking Engine (Ranking.kt)"]
+    Ranker -->|"AVL > RAC > WL"| UI["📱 Jetpack Compose Station Board (BoardScreen.kt)"]
+```
 
 ---
 
@@ -95,9 +96,3 @@ This application is strictly **read-only** and uses official public endpoints to
 - No payment or booking functionality.
 - No passenger details or identity collection.
 - API keys are stored locally on-device using Android `SharedPreferences` and are never committed to git.
-
----
-
-<div align="center">
-  <sub>Built with ❤️ using Android Jetpack Compose, Kotlin & OpenAI</sub>
-</div>
