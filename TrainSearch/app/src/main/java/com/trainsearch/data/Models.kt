@@ -9,7 +9,9 @@ data class ClassAvailability(
     val seats: Int?,
     val number: Int?,
     val fare: Int?,
-    val quota: String?
+    val quota: String?,
+    /** ConfirmTkt's own confirmation-chance prediction, 0-100. Only meaningful for WL. */
+    val confirmChance: Int? = null
 )
 
 data class Train(
@@ -44,7 +46,9 @@ data class ResultRow(
     val number: Int?,
     val fare: Int?,
     val originGroupIndex: Int,
-    val destGroupIndex: Int
+    val destGroupIndex: Int,
+    /** ConfirmTkt's own confirmation-chance prediction, 0-100. Only meaningful for WL. */
+    val confirmChance: Int? = null
 )
 
 data class TripQuery(
