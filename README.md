@@ -43,10 +43,19 @@
 
 <div align="center">
 
-| Search Results Board | Station Route Typography | Filter Chips |
+| Conversational Prompt | Ranked Results + Confirmation % | Conversation History |
 | :---: | :---: | :---: |
-| <img src="screenshots/Screenshot_20260815_222102.png" width="240" /> | <img src="screenshots/Screenshot_20260815_223750.png" width="240" /> | <img src="screenshots/Screenshot_20260815_224527.png" width="240" /> |
+| <img src="screenshots/home_ai_prompt.png" width="230" /> | <img src="screenshots/search_results_confirmation.png" width="230" /> | <img src="screenshots/conversation_history_sheet.png" width="230" /> |
+| The agent asks a short clarifying question in the same language you used, right where you type. | Every result ranked, with ConfirmTkt's live confirmation-chance % next to each `WL` status. | Tap the badge to glance back at the rolling summary and recent turns — read-only, no editing. |
 
+</div>
+
+### 🕘 Finding the History button
+
+The small circular badge in the top-right corner of the header is the entry point to the app's [conversation memory](#-key-features) — tap it any time to open the read-only history sheet shown above.
+
+<div align="center">
+<img src="screenshots/history_button_callout.png" width="320" alt="Callout highlighting the Conversation History button in the top-right corner of the header" />
 </div>
 
 ---
