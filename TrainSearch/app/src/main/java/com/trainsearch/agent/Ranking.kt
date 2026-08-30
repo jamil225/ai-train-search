@@ -31,7 +31,8 @@ fun flatten(train: Train, date: String, originGroupIndex: Int, destGroupIndex: I
             number = a.number,
             fare = a.fare,
             originGroupIndex = originGroupIndex,
-            destGroupIndex = destGroupIndex
+            destGroupIndex = destGroupIndex,
+            confirmChance = a.confirmChance
         )
     }
 

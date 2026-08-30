@@ -481,7 +481,19 @@ private fun BoardCard(row: ResultRow, top: Boolean) {
                     color = Dim,
                     fontSize = 12.sp
                 )
-                StatusPillBadge(row)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    StatusPillBadge(row)
+                    val chance = row.confirmChance
+                    if (row.kind == StatusKind.WL && chance != null) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "($chance%)",
+                            color = confirmChanceColor(chance),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
         }
     }
@@ -507,4 +519,14 @@ private fun StatusPillBadge(row: ResultRow) {
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
         )
     }
+}
+
+/**
+ * Colors ConfirmTkt's confirmation-chance percentage independently of the WL pill's own
+ * (always red) background: >=70 confident green, 40-69 middling amber, <40 unlikely red.
+ */
+fun confirmChanceColor(pct: Int): Color = when {
+    pct >= 70 -> AvlGreen
+    pct >= 40 -> RacAmber
+    else -> WlRed
 }

@@ -1,9 +1,12 @@
 package com.trainsearch.agent
 
+import com.trainsearch.data.ClassAvailability
 import com.trainsearch.data.ResultRow
 import com.trainsearch.data.StatusKind
+import com.trainsearch.data.Train
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -20,14 +23,16 @@ class RankingTest {
         duration: Int? = 1200,
         date: String = "01-09-2026",
         originIdx: Int = 0,
-        destIdx: Int = 0
+        destIdx: Int = 0,
+        confirmChance: Int? = null
     ) = ResultRow(
         trainNumber = train, trainName = "Test Exp", fromStnCode = from, toStnCode = to,
         departureTime = dep, arrivalTime = "10:00", durationMinutes = duration,
         durationFormatted = "20h 0m", date = date, travelClass = cls,
         status = "$kind $number", kind = kind,
         seats = if (kind == StatusKind.AVL) number else null,
-        number = number, fare = 665, originGroupIndex = originIdx, destGroupIndex = destIdx
+        number = number, fare = 665, originGroupIndex = originIdx, destGroupIndex = destIdx,
+        confirmChance = confirmChance
     )
 
     @Test fun `availability kind is the primary axis`() {
@@ -145,5 +150,27 @@ class RankingTest {
 
     @Test fun `dedup keeps the same train on different dates`() {
         assertEquals(2, dedup(listOf(row(date = "01-09-2026"), row(date = "02-09-2026"))).size)
+    }
+
+    @Test fun `flatten copies confirmChance through from ClassAvailability`() {
+        val train = Train(
+            trainNumber = "18238", trainName = "Test Exp", fromStnCode = "NDLS", fromStnName = "NDLS",
+            toStnCode = "BPL", toStnName = "Bhopal", departureTime = "18:30", arrivalTime = "05:00",
+            durationMinutes = 630, durationFormatted = "10h 30m",
+            availability = listOf(
+                ClassAvailability("SL", "WL 2", StatusKind.WL, null, 2, 665, "GN", confirmChance = 71),
+                ClassAvailability("3A", "AVL 22", StatusKind.AVL, 22, 22, 1245, "GN", confirmChance = 100)
+            )
+        )
+
+        val rows = flatten(train, "01-09-2026", 0, 0)
+
+        assertEquals(71, rows.first { it.travelClass == "SL" }.confirmChance)
+        assertEquals(100, rows.first { it.travelClass == "3A" }.confirmChance)
+    }
+
+    @Test fun `flatten leaves confirmChance null when the source has none`() {
+        val row = row()
+        assertNull(row.confirmChance)
     }
 }

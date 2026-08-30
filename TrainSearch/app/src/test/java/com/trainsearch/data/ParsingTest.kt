@@ -78,4 +78,28 @@ class ParsingTest {
     @Test fun `parseAvailability tolerates null and junk entries`() {
         assertEquals(emptyList<ClassAvailability>(), parseAvailability(null))
     }
+
+    @Test fun `parseAvailability reads confirmChance for waitlisted classes`() {
+        val cache = Json.parseToJsonElement(
+            """
+            {
+              "SL": {"availability":"RLWL2/WL2","availabilityDisplayName":"WL 2","fare":"665","quota":"GN","predictionPercentage":71},
+              "3A": {"availability":"AVAILABLE-0022","availabilityDisplayName":"AVL 22","fare":"1245","quota":"GN","predictionPercentage":100}
+            }
+            """.trimIndent()
+        ) as JsonObject
+
+        val out = parseAvailability(cache)
+
+        assertEquals(71, out.first { it.travelClass == "SL" }.confirmChance)
+        assertEquals(100, out.first { it.travelClass == "3A" }.confirmChance)
+    }
+
+    @Test fun `parseAvailability leaves confirmChance null when absent`() {
+        val cache = Json.parseToJsonElement(
+            """{"SL": {"availability":"AVAILABLE-0024","availabilityDisplayName":"AVL 24","fare":"665","quota":"GN"}}"""
+        ) as JsonObject
+
+        assertNull(parseAvailability(cache).first().confirmChance)
+    }
 }
