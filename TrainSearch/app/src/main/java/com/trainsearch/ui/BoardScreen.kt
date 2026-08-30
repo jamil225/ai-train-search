@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.trainsearch.data.MessageEntity
 import com.trainsearch.data.ResultRow
 import com.trainsearch.data.StatusKind
 
@@ -37,6 +38,17 @@ import com.trainsearch.data.StatusKind
 fun BoardScreen(vm: BoardViewModel) {
     val state by vm.state.collectAsState()
     var input by remember { mutableStateOf("") }
+
+    var showHistorySheet by remember { mutableStateOf(false) }
+    var historySummary by remember { mutableStateOf<String?>(null) }
+    var historyMessages by remember { mutableStateOf<List<MessageEntity>>(emptyList()) }
+    LaunchedEffect(showHistorySheet) {
+        if (showHistorySheet) {
+            val snapshot = vm.loadHistoryForDisplay()
+            historySummary = snapshot.summary
+            historyMessages = snapshot.recentMessages
+        }
+    }
 
     val speechLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -52,7 +64,8 @@ fun BoardScreen(vm: BoardViewModel) {
         }
     }
 
-    Column(Modifier.fillMaxSize().background(BoardInk)) {
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().background(BoardInk)) {
 
         // Straight Station Board Header (Flush rectangle)
         Column(
@@ -192,6 +205,10 @@ fun BoardScreen(vm: BoardViewModel) {
                 .padding(14.dp, 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            state.clarificationQuestion?.let { question ->
+                ClarificationBubble(question)
+            }
+
             // Inline history suggestions list (does NOT steal keyboard focus!)
             val matchingHistory = state.history.filter {
                 input.isBlank() || it.contains(input, ignoreCase = true)
@@ -330,6 +347,23 @@ fun BoardScreen(vm: BoardViewModel) {
                 }
             }
         }
+    }
+
+        HistoryBadge(
+            onClick = { showHistorySheet = true },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(14.dp, 10.dp)
+        )
+    }
+
+    if (showHistorySheet) {
+        HistorySheet(
+            summary = historySummary,
+            messages = historyMessages,
+            onDismiss = { showHistorySheet = false }
+        )
     }
 }
 

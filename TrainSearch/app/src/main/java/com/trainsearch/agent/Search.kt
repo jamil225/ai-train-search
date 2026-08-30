@@ -1,10 +1,14 @@
 package com.trainsearch.agent
 
 import com.trainsearch.data.ConfirmTkt
+import com.trainsearch.data.ConversationRepository
+import com.trainsearch.data.ConvTurn
+import com.trainsearch.data.ParseOutcome
 import com.trainsearch.data.ResultRow
 import com.trainsearch.data.Stations
 import com.trainsearch.data.Train
 import com.trainsearch.data.normalizeDate
+import com.trainsearch.util.AppLogger
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -28,6 +32,8 @@ sealed interface SearchEvent {
         val dates: List<String>
     ) : SearchEvent
     data class Failed(val message: String) : SearchEvent
+    /** The agent needs more information before it can search; [question] is shown conversationally, not as an error. */
+    data class Clarify(val question: String) : SearchEvent
 }
 
 /** Cartesian product of origin and destination codes, origin-major. */
@@ -50,7 +56,11 @@ fun assemble(
     return rank(dedup(filtered)).take(limit)
 }
 
-class Search(private val api: ConfirmTkt, private val llm: Llm) {
+class Search(
+    private val api: ConfirmTkt,
+    private val llm: Llm,
+    private val conversations: ConversationRepository
+) {
 
     /**
      * channelFlow, not flow: progress is sent from inside each concurrent search
@@ -58,21 +68,43 @@ class Search(private val api: ConfirmTkt, private val llm: Llm) {
      * after it. A plain flow cannot emit from another coroutine.
      */
     fun run(sentence: String, today: LocalDate, zone: String): Flow<SearchEvent> = channelFlow {
+        // Context is read before appending this sentence, so the sentence doesn't
+        // also show up duplicated inside `history`.
+        val ctxBefore = conversations.currentContext()
+        conversations.appendUserMessage(sentence)
+        val history = ctxBefore.recentMessages.map { ConvTurn(it.role, it.content) }
+
         val trip = try {
             send(SearchEvent.Progress("Reading your trip", 0, 1))
-            llm.parseTrip(sentence, today, zone)
+            when (val outcome = llm.parseTrip(sentence, today, zone, ctxBefore.summary, history)) {
+                is ParseOutcome.NeedsClarification -> {
+                    conversations.appendAssistantMessage(outcome.question, clarificationQuestion = outcome.question)
+                    send(SearchEvent.Clarify(outcome.question))
+                    return@channelFlow
+                }
+                is ParseOutcome.Parsed -> outcome.trip
+            }
         } catch (e: Exception) {
+            AppLogger.error("Search", "parseTrip failed for sentence: \"$sentence\"", e)
             send(SearchEvent.Failed(e.message ?: "Couldn't read that trip.")); return@channelFlow
         }
+
+        // clarificationQuestion = null both records the turn and clears any pending question.
+        conversations.appendAssistantMessage(
+            "Parsed trip: ${trip.origin} -> ${trip.destination}, ${trip.dates.joinToString()}",
+            clarificationQuestion = null
+        )
 
         val origins = try {
             Stations.resolve(trip.origin, api)
         } catch (e: Exception) {
+            AppLogger.error("Search", "Station lookup failed for origin \"${trip.origin}\"", e)
             send(SearchEvent.Failed("Couldn't look up \"${trip.origin}\"."));  return@channelFlow
         }
         val destinations = try {
             Stations.resolve(trip.destination, api)
         } catch (e: Exception) {
+            AppLogger.error("Search", "Station lookup failed for destination \"${trip.destination}\"", e)
             send(SearchEvent.Failed("Couldn't look up \"${trip.destination}\"."));  return@channelFlow
         }
 
