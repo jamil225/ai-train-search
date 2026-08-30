@@ -98,7 +98,8 @@ fun parseAvailability(cache: JsonObject?): List<ClassAvailability> {
             seats = if (kind == StatusKind.AVL) number else null,
             number = number,
             fare = str("fare")?.toDoubleOrNull()?.toInt(),
-            quota = str("quota")
+            quota = str("quota"),
+            confirmChance = str("predictionPercentage")?.toDoubleOrNull()?.toInt()
         )
     }
     return out.sortedBy { CLASS_ORDER.indexOf(it.travelClass).let { i -> if (i < 0) 99 else i } }
