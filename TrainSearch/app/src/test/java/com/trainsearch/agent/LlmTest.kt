@@ -1,5 +1,6 @@
 package com.trainsearch.agent
 
+import com.trainsearch.data.ParseOutcome
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -59,6 +60,31 @@ class LlmTest {
 
     @Test fun `parseTripJson rejects a non-JSON model reply`() {
         val e = runCatching { llm.parseTripJson(envelope("I'm not sure what you mean")) }.exceptionOrNull()
+        assertTrue(e is IllegalArgumentException)
+    }
+
+    @Test fun `parseTripOutcomeJson returns NeedsClarification when the model asks a question`() {
+        val outcome = llm.parseTripOutcomeJson(
+            envelope("""{"needs_clarification":true,"question":"Which city are you leaving from?"}""")
+        )
+        assertTrue(outcome is ParseOutcome.NeedsClarification)
+        assertEquals("Which city are you leaving from?", (outcome as ParseOutcome.NeedsClarification).question)
+    }
+
+    @Test fun `parseTripOutcomeJson returns Parsed for a normal well-formed trip`() {
+        val outcome = llm.parseTripOutcomeJson(
+            envelope("""{"origin":"Rajasthan","destination":"Pune","dates":["2026-09-01"],"classes":["SL"]}""")
+        )
+        assertTrue(outcome is ParseOutcome.Parsed)
+        val trip = (outcome as ParseOutcome.Parsed).trip
+        assertEquals("Rajasthan", trip.origin)
+        assertEquals("Pune", trip.destination)
+    }
+
+    @Test fun `parseTripOutcomeJson still throws for a genuinely incomplete trip without the clarification shape`() {
+        val e = runCatching {
+            llm.parseTripOutcomeJson(envelope("""{"origin":"","destination":"Pune","dates":["2026-09-01"],"classes":[]}"""))
+        }.exceptionOrNull()
         assertTrue(e is IllegalArgumentException)
     }
 }

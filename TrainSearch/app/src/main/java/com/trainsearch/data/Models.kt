@@ -58,6 +58,15 @@ data class TripQuery(
     val classes: List<String>
 )
 
+/** A lightweight conversation turn passed into the LLM prompt — role + text only, no id/timestamp. */
+data class ConvTurn(val role: MessageRole, val content: String)
+
+/** What the model returned for one parse attempt: either a complete trip, or a follow-up question. */
+sealed interface ParseOutcome {
+    data class Parsed(val trip: TripQuery) : ParseOutcome
+    data class NeedsClarification(val question: String) : ParseOutcome
+}
+
 data class StationGroup(val name: String, val codes: List<String>)
 
 data class Station(
