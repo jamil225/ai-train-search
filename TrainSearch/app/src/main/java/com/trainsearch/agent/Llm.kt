@@ -26,7 +26,11 @@ import java.time.LocalDate
 import java.util.concurrent.TimeUnit
 
 private const val ENDPOINT = "https://api.openai.com/v1/chat/completions"
-private const val MODEL = "gpt-4o-mini"
+
+// gpt-5-nano: this app's job is structured intent extraction + grounding against prior
+// conversation turns, not open-ended reasoning — nano is the cheapest tier built for exactly
+// that, and noticeably more reliable at it than gpt-4o-mini in practice.
+private const val MODEL = "gpt-5-nano"
 private const val MAX_DATES = 31
 
 private const val CLARIFICATION_SCHEMA_PROMPT = """
@@ -35,6 +39,8 @@ private const val CLARIFICATION_SCHEMA_PROMPT = """
     JSON only:
     {"needs_clarification": true, "question": string}
     The question must be short, conversational, and ask only for what's actually missing.
+    Write the question in the same language the user has been using: Hindi (Devanagari script)
+    if their messages are in Hindi or Hinglish, otherwise English.
     Before asking anything, re-read the ENTIRE conversation history below, not just the most
     recent message — a value given several turns ago is still valid and must be treated as
     known unless the user's current message clearly changes it. Never re-ask for the origin,
@@ -72,7 +78,13 @@ class Llm(
         withContext(Dispatchers.IO) {
             val payload = buildJsonObject {
                 put("model", MODEL)
-                put("temperature", 0)
+                // gpt-5-family models only accept their default temperature and reject an
+                // explicit value the way gpt-4o-mini accepted temperature=0 — so this is only
+                // sent for older model families that actually support tuning it.
+                if (!MODEL.startsWith("gpt-5")) put("temperature", 0)
+                // Extraction/grounding, not open-ended reasoning: keep gpt-5's own reasoning
+                // effort minimal so nano stays fast here instead of "thinking" unnecessarily.
+                if (MODEL.startsWith("gpt-5")) put("reasoning_effort", "minimal")
                 if (forceJson) putJsonObject("response_format") { put("type", "json_object") }
                 put("messages", buildJsonArray {
                     add(buildJsonObject { put("role", "system"); put("content", system) })
