@@ -7,7 +7,6 @@ import com.trainsearch.agent.Search
 import com.trainsearch.agent.SearchEvent
 import com.trainsearch.data.ConfirmTkt
 import com.trainsearch.data.ConversationRepository
-import com.trainsearch.data.MessageRole
 import com.trainsearch.data.ResultRow
 import com.trainsearch.data.StatusKind
 import com.trainsearch.data.formatDateDisplay
@@ -35,7 +34,6 @@ data class BoardState(
     val selectedDateFilter: String? = null,
     val selectedClassFilter: String? = null,
     val selectedSortOrder: SortOrder = SortOrder.RANK,
-    val history: List<String> = emptyList(),
     /** Set when the agent needs more information; shown as a conversational prompt, not an error. */
     val clarificationQuestion: String? = null
 ) {
@@ -71,17 +69,8 @@ class BoardViewModel(
     init {
         viewModelScope.launch {
             try {
-                val (ctx, pendingQuestion) = conversations.bootstrap()
-                val seededHistory = ctx.recentMessages
-                    .filter { it.role == MessageRole.USER }
-                    .map { it.content }
-                    .asReversed() // newest first, matching the old prepend-based ordering
-                    .distinct()
-                    .take(10)
-                _state.value = _state.value.copy(
-                    history = seededHistory,
-                    clarificationQuestion = pendingQuestion
-                )
+                val (_, pendingQuestion) = conversations.bootstrap()
+                _state.value = _state.value.copy(clarificationQuestion = pendingQuestion)
             } catch (e: Exception) {
                 // If persisted history can't be read (e.g. a corrupt database), fail soft into a
                 // blank slate rather than leaving the app stuck or crashing on every launch.
@@ -115,11 +104,9 @@ class BoardViewModel(
 
         // The user's reply might be answering a pending clarification rather than a brand new
         // search \u2014 either way `Search.run` sends full context, so no special-casing is needed here.
-        val updatedHistory = (listOf(trimmed) + _state.value.history).distinct().take(10)
         _state.value = BoardState(
             busy = true,
             progressLabel = "Reading your trip",
-            history = updatedHistory,
             clarificationQuestion = null
         )
 
@@ -136,14 +123,12 @@ class BoardViewModel(
                                 busy = false,
                                 rows = event.rows,
                                 heading = "${event.origin.uppercase()} \u2192 ${event.destination.uppercase()}",
-                                subheading = "$datesRange \u00b7 ${event.rows.size} options",
-                                history = updatedHistory
+                                subheading = "$datesRange \u00b7 ${event.rows.size} options"
                             )
                         }
-                        is SearchEvent.Failed -> BoardState(busy = false, error = event.message, history = updatedHistory)
+                        is SearchEvent.Failed -> BoardState(busy = false, error = event.message)
                         is SearchEvent.Clarify -> BoardState(
                             busy = false,
-                            history = updatedHistory,
                             clarificationQuestion = event.question
                         )
                     }
@@ -154,8 +139,7 @@ class BoardViewModel(
                 AppLogger.error("BoardViewModel", "Unhandled failure while running search for: \"$trimmed\"", e)
                 _state.value = BoardState(
                     busy = false,
-                    error = "Something went wrong. Please try again.",
-                    history = updatedHistory
+                    error = "Something went wrong. Please try again."
                 )
             }
         }

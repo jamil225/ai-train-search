@@ -7,7 +7,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,7 +16,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.*
@@ -60,6 +58,7 @@ fun BoardScreen(vm: BoardViewModel) {
             if (!spokenText.isNullOrBlank()) {
                 input = spokenText
                 vm.submit(spokenText)
+                input = ""
             }
         }
     }
@@ -194,9 +193,7 @@ fun BoardScreen(vm: BoardViewModel) {
             }
         }
 
-        // Bottom Input Bar & Inline History Suggestions Container
-        var showHistoryMenu by remember { mutableStateOf(false) }
-
+        // Bottom Input Bar
         Column(
             Modifier
                 .fillMaxWidth()
@@ -209,59 +206,6 @@ fun BoardScreen(vm: BoardViewModel) {
                 ClarificationBubble(question)
             }
 
-            // Inline history suggestions list (does NOT steal keyboard focus!)
-            val matchingHistory = state.history.filter {
-                input.isBlank() || it.contains(input, ignoreCase = true)
-            }
-            if (showHistoryMenu && matchingHistory.isNotEmpty()) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    color = BoardSurface,
-                    border = BorderStroke(1.dp, Rule)
-                ) {
-                    Column(Modifier.padding(vertical = 6.dp)) {
-                        Text(
-                            text = "RECENT SEARCHES",
-                            color = BoardYellow,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                        )
-                        matchingHistory.take(5).forEach { item ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        input = item
-                                        showHistoryMenu = false
-                                        vm.submit(item)
-                                    }
-                                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.History,
-                                    contentDescription = "Recent search",
-                                    tint = BoardYellow,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = item,
-                                    color = BoardText,
-                                    fontSize = 13.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -269,10 +213,7 @@ fun BoardScreen(vm: BoardViewModel) {
             ) {
                 TextField(
                     value = input,
-                    onValueChange = {
-                        input = it
-                        showHistoryMenu = true
-                    },
+                    onValueChange = { input = it },
                     placeholder = { Text("Type a trip\u2026", color = Dim, fontSize = 14.sp) },
                     singleLine = true,
                     enabled = !state.busy,
@@ -286,44 +227,34 @@ fun BoardScreen(vm: BoardViewModel) {
                         disabledIndicatorColor = Color.Transparent
                     ),
                     trailingIcon = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = {
-                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
-                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "hi-IN")
-                                    putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
-                                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Say your trip details in Hindi or English...")
-                                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 6000L)
-                                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
-                                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 3000L)
-                                }
-                                try {
-                                    speechLauncher.launch(intent)
-                                } catch (_: Exception) {}
-                            }) {
-                                Icon(
-                                    imageVector = Icons.Default.Mic,
-                                    contentDescription = "Voice search",
-                                    tint = BoardYellow,
-                                    modifier = Modifier.size(20.dp)
-                                )
+                        IconButton(onClick = {
+                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
+                                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "hi-IN")
+                                putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
+                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Say your trip details in Hindi or English...")
+                                // +20% over the defaults so a natural mid-sentence pause doesn't cut the recognizer off early.
+                                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 7200L)
+                                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 4800L)
+                                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 3600L)
                             }
-                            IconButton(onClick = { showHistoryMenu = !showHistoryMenu }) {
-                                Icon(
-                                    imageVector = Icons.Default.History,
-                                    contentDescription = "Search history",
-                                    tint = if (showHistoryMenu) BoardYellow else Dim,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
+                            try {
+                                speechLauncher.launch(intent)
+                            } catch (_: Exception) {}
+                        }) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "Voice search",
+                                tint = BoardYellow,
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
                     },
                     modifier = Modifier.weight(1f)
                 )
                 Button(
                     onClick = {
-                        showHistoryMenu = false
                         vm.submit(input)
                         input = ""
                     },

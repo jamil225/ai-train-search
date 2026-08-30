@@ -34,8 +34,16 @@ private const val CLARIFICATION_SCHEMA_PROMPT = """
     is still missing or ambiguous after considering the conversation below, reply with
     JSON only:
     {"needs_clarification": true, "question": string}
-    The question must be short, conversational, and ask only for what's actually missing —
-    never re-ask for something already given in the sentence or in the conversation below.
+    The question must be short, conversational, and ask only for what's actually missing.
+    Before asking anything, re-read the ENTIRE conversation history below, not just the most
+    recent message — a value given several turns ago is still valid and must be treated as
+    known unless the user's current message clearly changes it. Never re-ask for the origin,
+    destination, date, or class if it appears anywhere earlier in this conversation, even if
+    it was several turns back or given only once.
+    Treat 'any', 'any class', 'no preference', 'doesn't matter', 'कोई भी', 'कोई भी क्लास', or
+    similar words in English, Hindi, or Hinglish as an explicit answer meaning classes = [] —
+    this is a valid, complete answer to a class question and must NOT trigger another
+    clarification question about class.
     Otherwise, reply with the trip JSON exactly as specified above (omit "needs_clarification").
 """
 
@@ -157,7 +165,9 @@ class Llm(
             If the user names multiple destination cities or stations, join them with commas into 'destination'.
             Expand a date range (e.g. 'आज से 4 सितंबर तक' or 'today till 4th of September') into ALL explicit calendar dates in ISO YYYY-MM-DD format in that range, up to at most $MAX_DATES.
             Translate Devanagari Hindi city names into standard English city names for 'origin' and 'destination'.
-            classes uses Indian Railways codes (SL, 3A, 2A, 1A, 3E, CC, 2S). Use [] if none was named.
+            classes uses Indian Railways codes (SL, 3A, 2A, 1A, 3E, CC, 2S). Use [] if none was named,
+            and also use [] when the user says 'any', 'any class', 'no preference', 'doesn't matter',
+            or an equivalent Hindi/Hinglish phrase — that is a complete answer, not missing information.
         """.trimIndent()
 
     /**

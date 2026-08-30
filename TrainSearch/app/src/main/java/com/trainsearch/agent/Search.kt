@@ -90,8 +90,11 @@ class Search(
         }
 
         // clarificationQuestion = null both records the turn and clears any pending question.
+        // Store a short, fixed line rather than the verbose parsed-trip dump: this is what gets
+        // sent back to the LLM as conversation history on future turns, so keeping it generic
+        // keeps per-call token cost down. (Proper summarization is a future phase.)
         conversations.appendAssistantMessage(
-            "Parsed trip: ${trip.origin} -> ${trip.destination}, ${trip.dates.joinToString()}",
+            "Agent returned the result for this query.",
             clarificationQuestion = null
         )
 
