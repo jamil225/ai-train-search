@@ -44,12 +44,14 @@ fun BoardScreen(vm: BoardViewModel) {
     val context = LocalContext.current
 
     var showHistorySheet by remember { mutableStateOf(false) }
-    var historySummary by remember { mutableStateOf<String?>(null) }
+    var historyTripState by remember { mutableStateOf<String?>(null) }
     var historyMessages by remember { mutableStateOf<List<MessageEntity>>(emptyList()) }
     LaunchedEffect(showHistorySheet) {
         if (showHistorySheet) {
             val snapshot = vm.loadHistoryForDisplay()
-            historySummary = snapshot.summary
+            historyTripState = snapshot.tripState?.let {
+                "${it.origin?.uppercase() ?: "?"} → ${it.destination?.uppercase() ?: "?"}"
+            }
             historyMessages = snapshot.recentMessages
         }
     }
@@ -440,18 +442,36 @@ fun BoardScreen(vm: BoardViewModel) {
         }
     }
 
-        HistoryBadge(
-            onClick = { showHistorySheet = true },
+        Row(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
-                .padding(14.dp, 10.dp)
-        )
+                .padding(14.dp, 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            IconButton(
+                onClick = { vm.startNewTrip() },
+                modifier = Modifier
+                    .background(BoardYellow.copy(alpha = 0.9f), CircleShape)
+                    .size(40.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "New search",
+                    tint = BoardInk,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            HistoryBadge(
+                onClick = { showHistorySheet = true },
+                modifier = Modifier.size(40.dp)
+            )
+        }
     }
 
     if (showHistorySheet) {
         HistorySheet(
-            summary = historySummary,
+            summary = historyTripState,
             messages = historyMessages,
             onDismiss = { showHistorySheet = false }
         )

@@ -4,46 +4,43 @@ import com.trainsearch.util.AppLogger
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/** Raw message count that triggers a compaction pass. */
-const val COMPACTION_TRIGGER_COUNT = 40
+/** Raw message count that triggers a trimming pass (no LLM call). */
+const val COMPACTION_TRIGGER_COUNT = 50
 
-/** Raw messages kept (most recent) after a compaction pass. */
-const val COMPACTION_KEEP_COUNT = 15
+/** Raw messages kept (most recent) after a trim. */
+const val COMPACTION_KEEP_COUNT = 10
 
-/** Max raw messages ever sent to the model as context, alongside the summary. */
-const val CONTEXT_MESSAGE_LIMIT = 15
+/** Max raw messages ever sent to the model as context (alongside tripState). */
+const val CONTEXT_MESSAGE_LIMIT = 20
 
-/** Idle days after which the whole conversation is summarized and cleared. */
+/** Idle days after which the whole conversation is cleared. */
 const val EXPIRY_DAYS = 30L
 
 private const val DAY_MS = 24L * 60 * 60 * 1000
 
-/** Context handed to the LLM for the next call: the rolling summary (if any) plus recent raw turns, oldest-first. */
+/** Context handed to the LLM for the next call: the explicit tripState (if any) plus recent raw turns, oldest-first. */
 data class ConversationContext(
-    val summary: String?,
+    val tripState: TripState?,
     val recentMessages: List<MessageEntity>
 )
 
 /**
  * Single owner of all conversation state. `Search`/`BoardViewModel` never touch [ConversationDao]
- * directly — they append messages, ask for context, and let this class handle compaction and expiry.
+ * directly — they append messages, ask for context, and manage state through this class.
  *
- * [summarizer] is injected as a plain function (existing summary, older messages) -> new summary,
- * rather than a direct `Llm`/`Summarizer` reference, so this class stays unit-testable with a fake
- * summarizer and a fake DAO, without needing Room or network in tests.
+ * TripState is the authoritative slot carrier — implicit extraction from prose is gone.
  */
 class ConversationRepository(
     private val dao: ConversationDao,
-    private val summarizer: suspend (existingSummary: String?, olderMessages: List<MessageEntity>) -> String,
     private val nowMs: () -> Long = System::currentTimeMillis
 ) {
-    // Serializes append/compact/expire so overlapping calls (e.g. a rapid double-submit)
-    // can't interleave and corrupt the trim/summarize sequence.
+    // Serializes append/trim/expire so overlapping calls (e.g. a rapid double-submit)
+    // can't interleave and corrupt the trim/state sequence.
     private val mutex = Mutex()
 
     /**
      * Call once at startup. Runs the 30-day expiry check, then returns the context to resume
-     * with (summary + last [CONTEXT_MESSAGE_LIMIT] messages) plus any outstanding clarification
+     * with (tripState + last [CONTEXT_MESSAGE_LIMIT] messages) plus any outstanding clarification
      * question the user hadn't answered yet (e.g. the app was killed mid-clarification).
      */
     suspend fun bootstrap(): Pair<ConversationContext, String?> = mutex.withLock {
@@ -56,14 +53,14 @@ class ConversationRepository(
         expireIfStaleLocked() // covers "before starting a new search", not just app start
         dao.insertMessage(MessageEntity(role = MessageRole.USER, content = text, createdAtEpochMs = nowMs()))
         touchLastActiveLocked()
-        compactIfNeededLocked()
+        trimIfNeededLocked()
     }
 
     suspend fun appendAssistantMessage(text: String, clarificationQuestion: String?) = mutex.withLock {
         dao.insertMessage(MessageEntity(role = MessageRole.ASSISTANT, content = text, createdAtEpochMs = nowMs()))
         val state = dao.getState() ?: ConversationStateEntity(lastActiveEpochMs = nowMs())
         dao.upsertState(state.copy(lastActiveEpochMs = nowMs(), pendingClarificationQuestion = clarificationQuestion))
-        compactIfNeededLocked()
+        trimIfNeededLocked()
     }
 
     suspend fun clearPendingClarification() = mutex.withLock {
@@ -71,12 +68,27 @@ class ConversationRepository(
         dao.upsertState(state.copy(pendingClarificationQuestion = null))
     }
 
-    /** Context to hand the LLM for the next call: current summary + last [CONTEXT_MESSAGE_LIMIT] raw messages. */
+    /** Persist the trip state. */
+    suspend fun updateTripState(state: TripState) = mutex.withLock {
+        val entity = dao.getState() ?: ConversationStateEntity(lastActiveEpochMs = nowMs())
+        dao.upsertState(entity.copy(tripState = state, lastActiveEpochMs = nowMs()))
+    }
+
+    /** Clear the trip state (used on "new trip" action). */
+    suspend fun resetTripState() = mutex.withLock {
+        val state = dao.getState() ?: return@withLock
+        dao.upsertState(state.copy(tripState = null))
+    }
+
+    /** Context to hand the LLM for the next call: current tripState + last [CONTEXT_MESSAGE_LIMIT] raw messages. */
     suspend fun currentContext(): ConversationContext = mutex.withLock { buildContextLocked() }
 
-    /** Read-only snapshot for the history popup: current summary + every raw message still stored. */
+    /** Read-only snapshot for the history popup: current tripState + every raw message still stored. */
     suspend fun historySnapshot(): ConversationContext = mutex.withLock {
-        ConversationContext(dao.getState()?.summary, dao.allMessages())
+        ConversationContext(dao.getState()?.let { state ->
+            // Parse the JSON tripState back to object for display
+            state.tripState
+        }, dao.allMessages())
     }
 
     /** Debug-only hook (never called from production code paths) to test the 30-day expiry without waiting. */
@@ -88,7 +100,8 @@ class ConversationRepository(
     private suspend fun buildContextLocked(): ConversationContext {
         val all = dao.allMessages()
         val recent = all.takeLast(CONTEXT_MESSAGE_LIMIT)
-        return ConversationContext(dao.getState()?.summary, recent)
+        val state = dao.getState()
+        return ConversationContext(state?.tripState, recent)
     }
 
     private suspend fun touchLastActiveLocked() {
@@ -96,23 +109,13 @@ class ConversationRepository(
         dao.upsertState(state.copy(lastActiveEpochMs = nowMs()))
     }
 
-    private suspend fun compactIfNeededLocked() {
+    private suspend fun trimIfNeededLocked() {
         val count = dao.messageCount()
         if (count < COMPACTION_TRIGGER_COUNT) return
 
-        val all = dao.allMessages()
-        val older = all.dropLast(COMPACTION_KEEP_COUNT)
-        if (older.isEmpty()) return
-
-        val state = dao.getState()
-        val newSummary = runCatching { summarizer(state?.summary, older) }.getOrElse {
-            // Best-effort: if the summarizer call fails (e.g. network), skip compaction this
-            // round rather than losing messages — it will be retried on the next append.
-            AppLogger.error("ConversationRepository", "Compaction summarizer call failed, will retry next append", it)
-            return
-        }
+        // Simple trim: drop oldest, keep newest COMPACTION_KEEP_COUNT.
+        // No LLM call, no summarization — tripState carries the slots now.
         dao.trimToNewest(COMPACTION_KEEP_COUNT)
-        dao.upsertState((state ?: ConversationStateEntity(lastActiveEpochMs = nowMs())).copy(summary = newSummary))
     }
 
     private suspend fun expireIfStaleLocked() {
@@ -120,18 +123,8 @@ class ConversationRepository(
         val idleMs = nowMs() - state.lastActiveEpochMs
         if (idleMs <= EXPIRY_DAYS * DAY_MS) return
 
-        val remaining = dao.allMessages()
-        if (remaining.isNotEmpty()) {
-            val finalSummary = runCatching { summarizer(state.summary, remaining) }.getOrElse {
-                AppLogger.error("ConversationRepository", "Expiry summarizer call failed, keeping prior summary", it)
-                state.summary
-            }
-            dao.upsertState(
-                state.copy(summary = finalSummary, lastActiveEpochMs = nowMs(), pendingClarificationQuestion = null)
-            )
-        } else {
-            dao.upsertState(state.copy(lastActiveEpochMs = nowMs(), pendingClarificationQuestion = null))
-        }
+        // Conversation has been idle > 30 days. Clear it entirely.
         dao.clearMessages()
+        dao.upsertState(state.copy(tripState = null, lastActiveEpochMs = nowMs(), pendingClarificationQuestion = null))
     }
 }

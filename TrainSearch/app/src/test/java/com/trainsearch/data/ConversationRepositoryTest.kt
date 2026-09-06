@@ -45,23 +45,19 @@ class ConversationRepositoryTest {
 
     @Test fun `compaction does not fire below the trigger count`() = runTest {
         val dao = FakeConversationDao()
-        var summarizerCalls = 0
-        val repo = ConversationRepository(dao, summarizer = { _, _ -> summarizerCalls++; "summary" })
+        val repo = ConversationRepository(dao)
 
         repeat(COMPACTION_TRIGGER_COUNT - 1) { repo.appendUserMessage("query $it") }
 
         assertEquals(COMPACTION_TRIGGER_COUNT - 1, dao.messageCount())
-        assertEquals(0, summarizerCalls)
     }
 
     @Test fun `compaction fires exactly at the trigger count and keeps only the newest window`() = runTest {
         val dao = FakeConversationDao()
-        var summarizerCalls = 0
-        val repo = ConversationRepository(dao, summarizer = { _, _ -> summarizerCalls++; "profile" })
+        val repo = ConversationRepository(dao)
 
         repeat(COMPACTION_TRIGGER_COUNT) { repo.appendUserMessage("query $it") }
 
-        assertEquals(1, summarizerCalls)
         assertEquals(COMPACTION_KEEP_COUNT, dao.messageCount())
         // The newest COMPACTION_KEEP_COUNT messages survive, oldest-first.
         val remaining = dao.allMessages().map { it.content }
@@ -70,36 +66,45 @@ class ConversationRepositoryTest {
         assertEquals(expectedSurvivors, remaining)
     }
 
-    @Test fun `compaction summarizer receives the existing summary and only the older messages`() = runTest {
+    @Test fun `trip state can be persisted and retrieved`() = runTest {
         val dao = FakeConversationDao()
-        var seenExisting: String? = "unset"
-        var seenOlderCount = -1
-        val repo = ConversationRepository(dao, summarizer = { existing, older ->
-            seenExisting = existing
-            seenOlderCount = older.size
-            "new summary"
-        })
+        val repo = ConversationRepository(dao)
 
-        repeat(COMPACTION_TRIGGER_COUNT) { repo.appendUserMessage("q$it") }
+        val state = TripState(origin = "Jaipur", destination = "Mumbai", dates = listOf("2026-09-03"))
+        repo.updateTripState(state)
 
-        assertNull(seenExisting) // no prior summary on the first compaction pass
-        assertEquals(COMPACTION_TRIGGER_COUNT - COMPACTION_KEEP_COUNT, seenOlderCount)
-        assertEquals("new summary", repo.currentContext().summary)
+        val ctx = repo.currentContext()
+        assertEquals("Jaipur", ctx.tripState?.origin)
+        assertEquals("Mumbai", ctx.tripState?.destination)
+        assertEquals(listOf("2026-09-03"), ctx.tripState?.dates)
     }
 
-    @Test fun `expiry past 30 days summarizes once and clears all raw messages`() = runTest {
+    @Test fun `trip state can be reset`() = runTest {
+        val dao = FakeConversationDao()
+        val repo = ConversationRepository(dao)
+
+        val state = TripState(origin = "Jaipur", destination = "Mumbai", dates = listOf("2026-09-03"))
+        repo.updateTripState(state)
+        repo.resetTripState()
+
+        val ctx = repo.currentContext()
+        assertNull(ctx.tripState)
+    }
+
+    @Test fun `expiry past 30 days clears all raw messages and resets trip state`() = runTest {
         val dao = FakeConversationDao()
         var clock = 0L
-        var summarizerCalls = 0
-        val repo = ConversationRepository(dao, summarizer = { _, _ -> summarizerCalls++; "final profile" }, nowMs = { clock })
+        val repo = ConversationRepository(dao, nowMs = { clock })
 
         repo.appendUserMessage("hello")
+        val state = TripState(origin = "Jaipur", destination = "Mumbai")
+        repo.updateTripState(state)
+
         clock += (EXPIRY_DAYS + 1) * 24 * 60 * 60 * 1000L
 
         val (ctx, _) = repo.bootstrap()
 
-        assertEquals(1, summarizerCalls)
-        assertEquals("final profile", ctx.summary)
+        assertNull(ctx.tripState)
         assertTrue(ctx.recentMessages.isEmpty())
         assertEquals(0, dao.messageCount())
     }
@@ -107,32 +112,36 @@ class ConversationRepositoryTest {
     @Test fun `expiry does not fire at exactly the boundary`() = runTest {
         val dao = FakeConversationDao()
         var clock = 0L
-        var summarizerCalls = 0
-        val repo = ConversationRepository(dao, summarizer = { _, _ -> summarizerCalls++; "profile" }, nowMs = { clock })
+        val repo = ConversationRepository(dao, nowMs = { clock })
 
         repo.appendUserMessage("hello")
+        val state = TripState(origin = "Jaipur", destination = "Mumbai")
+        repo.updateTripState(state)
+
         clock += EXPIRY_DAYS * 24 * 60 * 60 * 1000L
 
         val (ctx, _) = repo.bootstrap()
 
-        assertEquals(0, summarizerCalls)
+        assertEquals("Jaipur", ctx.tripState?.origin)
         assertEquals(1, ctx.recentMessages.size)
     }
 
-    @Test fun `expiry with no remaining messages does not call the summarizer`() = runTest {
+    @Test fun `expiry with no remaining messages clears state cleanly`() = runTest {
         val dao = FakeConversationDao()
         var clock = 0L
-        var summarizerCalls = 0
-        val repo = ConversationRepository(dao, summarizer = { _, _ -> summarizerCalls++; "profile" }, nowMs = { clock })
+        val repo = ConversationRepository(dao, nowMs = { clock })
 
-        // Touch last-active without ever adding a message (state exists, no messages).
+        // Touch last-active and add state without messages.
         repo.appendUserMessage("hi")
+        val state = TripState(origin = "Jaipur", destination = "Mumbai")
+        repo.updateTripState(state)
         dao.clearMessages()
+
         clock += (EXPIRY_DAYS + 1) * 24 * 60 * 60 * 1000L
 
-        repo.bootstrap()
+        val (ctx, _) = repo.bootstrap()
 
-        assertEquals(0, summarizerCalls)
+        assertNull(ctx.tripState)
         assertFalse(dao.allMessages().isNotEmpty())
     }
 }

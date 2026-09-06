@@ -3,6 +3,7 @@ package com.trainsearch.data
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import androidx.room.TypeConverter
+import kotlinx.serialization.json.Json
 
 enum class MessageRole { USER, ASSISTANT }
 
@@ -16,14 +17,14 @@ data class MessageEntity(
 )
 
 /**
- * Singleton row (always id = SINGLETON_ID) holding the rolling pattern summary and
+ * Singleton row (always id = SINGLETON_ID) holding the explicit trip state and
  * bookkeeping timestamps. This is a single-user, single-conversation app, so there is
  * no conversation-id concept to model beyond this one row.
  */
 @Entity(tableName = "conversation_state")
 data class ConversationStateEntity(
     @PrimaryKey val id: Int = SINGLETON_ID,
-    val summary: String? = null,
+    val tripState: String? = null,  // JSON-encoded TripState; null means no state yet
     val lastActiveEpochMs: Long,
     val pendingClarificationQuestion: String? = null
 ) {
@@ -38,4 +39,11 @@ class Converters {
 
     @TypeConverter
     fun stringToRole(value: String): MessageRole = MessageRole.valueOf(value)
+
+    @TypeConverter
+    fun tripStateToString(s: TripState?): String? = s?.let { Json.encodeToString(it) }
+
+    @TypeConverter
+    fun stringToTripState(v: String?): TripState? =
+        v?.let { runCatching { Json.decodeFromString<TripState>(it) }.getOrNull() }
 }

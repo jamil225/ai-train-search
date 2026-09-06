@@ -70,7 +70,7 @@ class BoardViewModel(
     init {
         viewModelScope.launch {
             try {
-                val (_, pendingQuestion) = conversations.bootstrap()
+                val (ctx, pendingQuestion) = conversations.bootstrap()
                 _state.value = _state.value.copy(clarificationQuestion = pendingQuestion)
             } catch (e: Exception) {
                 // If persisted history can't be read (e.g. a corrupt database), fail soft into a
@@ -103,12 +103,25 @@ class BoardViewModel(
         _state.value = _state.value.copy(speechLanguage = lang)
     }
 
+    /** Start a new trip, clearing the persisted state. */
+    fun startNewTrip() {
+        _state.value = BoardState(speechLanguage = _state.value.speechLanguage)
+        viewModelScope.launch {
+            try {
+                conversations.resetTripState()
+            } catch (e: Exception) {
+                AppLogger.error("BoardViewModel", "Failed to reset trip state", e)
+            }
+        }
+    }
+
     fun submit(sentence: String) {
         val trimmed = sentence.trim()
         if (trimmed.isBlank() || _state.value.busy) return
 
-        // The user's reply might be answering a pending clarification rather than a brand new
-        // search — either way `Search.run` sends full context, so no special-casing is needed here.
+        // TripState carries the slot values from prior turns, so the search can be aware of what's
+        // already known. The user's reply might be answering a pending clarification or modifying
+        // an earlier value — the state merge handles both cases.
         _state.value = BoardState(
             busy = true,
             progressLabel = "Reading your trip",
