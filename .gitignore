@@ -8,3 +8,22 @@ TrainSearch/local.properties
 apk_backups/
 vendor/
 .claude/
+
+# Agent tooling configs (not part of the shipped app)
+.agents/
+.codex/
+CLAUDE.md
+graphify-out/
+
+# Agent/process docs (working notes, plans, specs, handoffs, research)
+# User-facing docs (README.md, docs/INSTALL.md, docs/HINDI_USER_GUIDE.md) stay tracked.
+/AGENTS.md
+/HANDOFF-ANTIGRAVITY.md
+/TRAIN_SEARCH_WORKFLOW.md
+docs/TRAIN_SEARCH_WORKFLOW.md
+docs/PROGRESS_LOG.md
+docs/PROGRESS_AND_HANDOFF.md
+docs/implementation_plan.md
+docs/deep-research-report.md
+docs/jodhpur_to_pune_results.md
+docs/superpowers/
