@@ -7,6 +7,8 @@ import com.trainsearch.data.ParseOutcome
 import com.trainsearch.data.ResultRow
 import com.trainsearch.data.Stations
 import com.trainsearch.data.Train
+import com.trainsearch.data.TripState
+import com.trainsearch.data.mergeTripState
 import com.trainsearch.data.normalizeDate
 import com.trainsearch.util.AppLogger
 import kotlinx.coroutines.async
@@ -74,29 +76,41 @@ class Search(
         conversations.appendUserMessage(sentence)
         val history = ctxBefore.recentMessages.map { ConvTurn(it.role, it.content) }
 
-        val trip = try {
+        // Reduce the trip state against the user's message.
+        val merged = try {
             send(SearchEvent.Progress("Reading your trip", 0, 1))
-            when (val outcome = llm.parseTrip(sentence, today, zone, ctxBefore.summary, history)) {
-                is ParseOutcome.NeedsClarification -> {
-                    conversations.appendAssistantMessage(outcome.question, clarificationQuestion = outcome.question)
-                    send(SearchEvent.Clarify(outcome.question))
-                    return@channelFlow
-                }
-                is ParseOutcome.Parsed -> outcome.trip
+            val delta = llm.reduceTrip(sentence, today, zone, ctxBefore.tripState ?: TripState(), history)
+            val merged = mergeTripState(ctxBefore.tripState ?: TripState(), delta)
+            conversations.updateTripState(merged)
+
+            // The guard: if the model re-asked with complete state, override it and proceed to search.
+            if (delta.needsClarification && merged.isComplete()) {
+                AppLogger.warn("Search", "Model re-asked with complete state; overriding and searching")
+                merged
+            } else if (delta.needsClarification) {
+                // Clarification needed and state incomplete — ask the user.
+                conversations.appendAssistantMessage(
+                    delta.question ?: "Could you give me a bit more detail about your trip?",
+                    clarificationQuestion = delta.question
+                )
+                send(SearchEvent.Clarify(delta.question ?: "Could you give me a bit more detail about your trip?"))
+                return@channelFlow
+            } else {
+                merged
             }
         } catch (e: Exception) {
-            AppLogger.error("Search", "parseTrip failed for sentence: \"$sentence\"", e)
+            AppLogger.error("Search", "reduceTrip failed for sentence: \"$sentence\"", e)
             send(SearchEvent.Failed(e.message ?: "Couldn't read that trip.")); return@channelFlow
         }
 
-        // clarificationQuestion = null both records the turn and clears any pending question.
-        // Store a short, fixed line rather than the verbose parsed-trip dump: this is what gets
-        // sent back to the LLM as conversation history on future turns, so keeping it generic
-        // keeps per-call token cost down. (Proper summarization is a future phase.)
-        conversations.appendAssistantMessage(
-            "Agent returned the result for this query.",
-            clarificationQuestion = null
-        )
+        // Convert merged state to TripQuery for the search.
+        val trip = try {
+            merged.toTripQuery()
+        } catch (e: Exception) {
+            AppLogger.error("Search", "Merged state could not be converted to trip: origin=${merged.origin}, dest=${merged.destination}", e)
+            send(SearchEvent.Failed(e.message ?: "Invalid trip state."))
+            return@channelFlow
+        }
 
         val origins = try {
             Stations.resolve(trip.origin, api)
@@ -167,6 +181,13 @@ class Search(
         }
 
         send(SearchEvent.Progress("Ranking", total, total))
+
+        // Build a factual assistant message: the trip that was searched and result count.
+        val classText = if (trip.classes.isEmpty()) "any class" else trip.classes.joinToString("/")
+        val bestTrain = rows.firstOrNull()?.let { "${it.trainNumber} ${it.trainName}" } ?: "unknown"
+        val assistantReply = "Searched ${trip.origin} → ${trip.destination} on ${trip.dates.first()}, $classText — ${rows.size} options, best $bestTrain"
+        conversations.appendAssistantMessage(assistantReply, clarificationQuestion = null)
+
         send(
             SearchEvent.Results(
                 rows = rows,

@@ -11,11 +11,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.trainsearch.agent.Llm
-import com.trainsearch.agent.Summarizer
 import com.trainsearch.data.ApiKeyStore
 import com.trainsearch.data.AppDatabase
 import com.trainsearch.data.ConversationRepository
-import com.trainsearch.data.ConvTurn
 import com.trainsearch.ui.BoardScreen
 import com.trainsearch.ui.BoardViewModel
 import com.trainsearch.ui.KeyScreen
@@ -43,16 +41,7 @@ class MainActivity : ComponentActivity() {
                             @Suppress("UNCHECKED_CAST")
                             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                                 val dao = AppDatabase.get(applicationContext).conversationDao()
-                                val summarizer = Summarizer(Llm(key))
-                                val conversations = ConversationRepository(
-                                    dao = dao,
-                                    summarizer = { existing, older ->
-                                        summarizer.summarize(
-                                            existing,
-                                            older.map { ConvTurn(it.role, it.content) }
-                                        )
-                                    }
-                                )
+                                val conversations = ConversationRepository(dao = dao)
                                 return BoardViewModel(key, conversations) as T
                             }
                         }

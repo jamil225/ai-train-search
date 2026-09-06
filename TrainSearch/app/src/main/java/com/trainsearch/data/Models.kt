@@ -58,6 +58,51 @@ data class TripQuery(
     val classes: List<String>
 )
 
+/**
+ * Explicit, typed conversation state — the source of truth for slot values.
+ * Singular comma-joined strings mirror the TripQuery shape; Stations.resolve already splits them.
+ */
+@kotlinx.serialization.Serializable
+data class TripState(
+    val origin: String? = null,
+    val destination: String? = null,
+    val dateExpression: String? = null,  // "today till 4 Sep" — as the user phrased it
+    val dates: List<String> = emptyList(), // expanded ISO, e.g. ["2026-09-03", "2026-09-04"]
+    val classes: List<String> = emptyList() // empty means "any"
+) {
+    fun isComplete() = !origin.isNullOrBlank() && !destination.isNullOrBlank() && dates.isNotEmpty()
+    fun toTripQuery() = TripQuery(origin!!, destination!!, dates, classes)
+}
+
+/** Raw response from LLM reduceTrip call. */
+@kotlinx.serialization.Serializable
+data class TripStateDelta(
+    val reset: Boolean = false,
+    val cleared: List<String> = emptyList(),
+    val state: TripState = TripState(),
+    val needsClarification: Boolean = false,
+    val question: String? = null
+)
+
+/**
+ * Merge the given delta into the current state using the merge rule:
+ * 1. Non-empty wins — model return non-empty → take it.
+ * 2. Empty never clears — model omits field → keep old value.
+ * 3. Explicit clears — only fields named in cleared[] are blanked.
+ *
+ * This is the crux of the TripState design — guarantees defensive behavior.
+ */
+fun mergeTripState(current: TripState, delta: TripStateDelta): TripState {
+    if (delta.reset) return delta.state
+    return TripState(
+        origin = delta.state.origin?.takeIf { it.isNotBlank() } ?: (if ("origin" in delta.cleared) null else current.origin),
+        destination = delta.state.destination?.takeIf { it.isNotBlank() } ?: (if ("destination" in delta.cleared) null else current.destination),
+        dateExpression = delta.state.dateExpression?.takeIf { it.isNotBlank() } ?: (if ("dateExpression" in delta.cleared) null else current.dateExpression),
+        dates = delta.state.dates.takeIf { it.isNotEmpty() } ?: (if ("dates" in delta.cleared) emptyList() else current.dates),
+        classes = delta.state.classes.takeIf { it.isNotEmpty() } ?: (if ("classes" in delta.cleared) emptyList() else current.classes)
+    )
+}
+
 /** A lightweight conversation turn passed into the LLM prompt — role + text only, no id/timestamp. */
 data class ConvTurn(val role: MessageRole, val content: String)
 

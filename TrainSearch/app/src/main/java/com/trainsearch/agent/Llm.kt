@@ -4,6 +4,8 @@ import com.trainsearch.data.ConvTurn
 import com.trainsearch.data.ParseOutcome
 import com.trainsearch.data.ResultRow
 import com.trainsearch.data.TripQuery
+import com.trainsearch.data.TripState
+import com.trainsearch.data.TripStateDelta
 import com.trainsearch.data.normalizeDate
 import com.trainsearch.util.AppLogger
 import kotlinx.coroutines.Dispatchers
@@ -33,24 +35,24 @@ private const val ENDPOINT = "https://api.openai.com/v1/chat/completions"
 private const val MODEL = "gpt-5-nano"
 private const val MAX_DATES = 31
 
-private const val CLARIFICATION_SCHEMA_PROMPT = """
-    You do not have to complete the trip on this turn. If the origin, destination, or date
-    is still missing or ambiguous after considering the conversation below, reply with
-    JSON only:
-    {"needs_clarification": true, "question": string}
+private const val REDUCER_SCHEMA_PROMPT = """
+    Return the complete new trip state by applying the user's message to the current state.
+    Copy forward every field the user did not change. To deliberately blank a field,
+    name it in "cleared" (e.g., "cleared": ["classes"]).
+    To start a brand-new trip, set "reset": true.
+
+    Ask for clarification ONLY for fields still empty after applying this message.
+    You do not have to complete the trip on this turn.
+    If origin, destination, or date is still missing, reply with:
+    {"needs_clarification": true, "question": string, ...state fields you do have...}
+
     The question must be short, conversational, and ask only for what's actually missing.
     Write the question in the same language the user has been using: Hindi (Devanagari script)
     if their messages are in Hindi or Hinglish, otherwise English.
-    Before asking anything, re-read the ENTIRE conversation history below, not just the most
-    recent message — a value given several turns ago is still valid and must be treated as
-    known unless the user's current message clearly changes it. Never re-ask for the origin,
-    destination, date, or class if it appears anywhere earlier in this conversation, even if
-    it was several turns back or given only once.
-    Treat 'any', 'any class', 'no preference', 'doesn't matter', 'कोई भी', 'कोई भी क्लास', or
-    similar words in English, Hindi, or Hinglish as an explicit answer meaning classes = [] —
-    this is a valid, complete answer to a class question and must NOT trigger another
-    clarification question about class.
-    Otherwise, reply with the trip JSON exactly as specified above (omit "needs_clarification").
+
+    Otherwise, reply with the complete new state (omit "needs_clarification"):
+    {"reset": false, "cleared": [...], "origin": ..., "destination": ..., "dateExpression": ...,
+     "dates": [...], "classes": [...]}
 """
 
 private const val CONTEXT_TRUST_NOTE = """
@@ -162,9 +164,8 @@ class Llm(
         return TripQuery(origin, destination, dates, list("classes").map(String::uppercase).filter { it in known })
     }
 
-    private fun baseTripSystemPrompt(today: LocalDate, zone: String): String = """
-            You extract a train trip from a sentence written in English, Hindi (Devanagari script), or Hinglish (Hindi in Roman script). Reply with JSON only:
-            {"origin": string, "destination": string, "dates": [ISO date strings], "classes": [class codes]}
+    private fun baseTripExtractionRules(today: LocalDate, zone: String): String = """
+            You extract a train trip from a sentence written in English, Hindi (Devanagari script), or Hinglish (Hindi in Roman script).
 
             Today is $today in timezone $zone. Resolve relative dates against that.
             Understand Hindi words:
@@ -183,11 +184,44 @@ class Llm(
         """.trimIndent()
 
     /**
-     * Parses one sentence into a trip, or a request for clarification, using prior conversation
-     * as background context. [summary] is the rolling pattern summary from [com.trainsearch.data.ConversationRepository]
-     * (if any); [history] is oldest-first and already capped by the repository (at most
+     * Reduces the conversation state by applying the user's message.
+     * [currentState] is the known trip state from prior turns (or empty if none).
+     * [history] is oldest-first and already capped by the repository (at most
      * [com.trainsearch.data.CONTEXT_MESSAGE_LIMIT] turns) — this function does not re-trim it.
+     *
+     * Returns a delta describing the new state, whether clarification is needed, and any
+     * follow-up question.
      */
+    suspend fun reduceTrip(
+        sentence: String,
+        today: LocalDate,
+        zone: String,
+        currentState: TripState?,
+        history: List<ConvTurn>
+    ): TripStateDelta {
+        val system = buildString {
+            appendLine(baseTripExtractionRules(today, zone))
+            appendLine()
+            appendLine("CURRENT TRIP STATE (carried from earlier turns — every filled field is ALREADY KNOWN):")
+            if (currentState != null) {
+                appendLine(Json.encodeToString(currentState))
+            } else {
+                appendLine(TripState()) // empty state as example
+            }
+            appendLine()
+            appendLine(REDUCER_SCHEMA_PROMPT.trimIndent())
+            if (history.isNotEmpty()) {
+                appendLine()
+                appendLine("Recent conversation (oldest first):")
+                history.forEach { appendLine("${it.role}: ${it.content}") }
+            }
+            appendLine()
+            appendLine(CONTEXT_TRUST_NOTE.trimIndent())
+        }
+        return reduceTripStateJson(chat(system, sentence, forceJson = true))
+    }
+
+    /** For backwards compatibility with existing tests that use parseTrip. */
     suspend fun parseTrip(
         sentence: String,
         today: LocalDate,
@@ -195,24 +229,55 @@ class Llm(
         summary: String?,
         history: List<ConvTurn>
     ): ParseOutcome {
-        val system = buildString {
-            appendLine(baseTripSystemPrompt(today, zone))
-            appendLine()
-            appendLine(CLARIFICATION_SCHEMA_PROMPT.trimIndent())
-            if (summary != null) {
-                appendLine()
-                appendLine("Summary of this user's usual travel patterns (background only, not necessarily today's trip):")
-                appendLine(summary)
+        // Delegate to reduceTrip, then convert to ParseOutcome
+        val delta = reduceTrip(sentence, today, zone, TripState(), history)
+        return if (delta.needsClarification) {
+            ParseOutcome.NeedsClarification(delta.question ?: "Could you give me a bit more detail about your trip?")
+        } else {
+            // Convert TripState to TripQuery for the result
+            try {
+                ParseOutcome.Parsed(delta.state.toTripQuery())
+            } catch (e: Exception) {
+                ParseOutcome.NeedsClarification("I need a bit more detail to search for trains.")
             }
-            if (history.isNotEmpty()) {
-                appendLine()
-                appendLine("Recent conversation (oldest first, may include an earlier clarification question):")
-                history.forEach { appendLine("${it.role}: ${it.content}") }
-            }
-            appendLine()
-            appendLine(CONTEXT_TRUST_NOTE.trimIndent())
         }
-        return parseTripOutcomeJson(chat(system, sentence, forceJson = true))
+    }
+
+    /**
+     * Parses the reducer response into a TripStateDelta.
+     * Defensive: missing fields default to empty/null so a malformed response degrades gracefully.
+     */
+    internal fun reduceTripStateJson(body: String): TripStateDelta {
+        val text = content(body)
+        val obj = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()
+            ?: run {
+                AppLogger.error("Llm", "Model reply wasn't valid JSON for trip state: $text")
+                return TripStateDelta(needsClarification = true, question = "Could you give me a bit more detail about your trip?")
+            }
+
+        fun str(k: String) = obj[k]?.jsonPrimitive?.content?.trim().orEmpty().ifBlank { null }
+        fun list(k: String) = (obj[k] as? JsonArray)
+            ?.mapNotNull { it.jsonPrimitive.content.trim().takeIf(String::isNotBlank) }
+            .orEmpty()
+
+        val needsClarification = obj["needs_clarification"]?.jsonPrimitive?.booleanOrNull == true
+        val cleared = list("cleared")
+        val reset = obj["reset"]?.jsonPrimitive?.booleanOrNull == false ?: false
+
+        val state = TripState(
+            origin = str("origin"),
+            destination = str("destination"),
+            dateExpression = str("dateExpression"),
+            dates = list("dates").take(MAX_DATES),
+            classes = list("classes").map(String::uppercase).filter { it in setOf("SL", "3A", "2A", "1A", "3E", "CC", "EC", "2S") }
+        )
+
+        val question = if (needsClarification) {
+            obj["question"]?.jsonPrimitive?.content?.trim()
+                .let { if (it.isNullOrBlank()) "Could you give me a bit more detail about your trip?" else it }
+        } else null
+
+        return TripStateDelta(reset = reset, cleared = cleared, state = state, needsClarification = needsClarification, question = question)
     }
 
     /**
@@ -230,7 +295,7 @@ class Llm(
         return ParseOutcome.Parsed(parseTripJson(body))
     }
 
-    /** Free-text (non-JSON) model call, used by [com.trainsearch.agent.Summarizer]. */
+    /** Free-text (non-JSON) model call for explain(). */
     suspend fun summarizeRaw(system: String, user: String): String =
         content(chat(system, user, forceJson = false)).trim()
 
