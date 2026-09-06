@@ -1,10 +1,10 @@
 package com.trainsearch.ui
 
-import android.app.Activity
-import android.content.Intent
-import android.speech.RecognizerIntent
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -16,18 +16,23 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.trainsearch.data.MessageEntity
 import com.trainsearch.data.ResultRow
 import com.trainsearch.data.StatusKind
@@ -36,6 +41,7 @@ import com.trainsearch.data.StatusKind
 fun BoardScreen(vm: BoardViewModel) {
     val state by vm.state.collectAsState()
     var input by remember { mutableStateOf("") }
+    val context = LocalContext.current
 
     var showHistorySheet by remember { mutableStateOf(false) }
     var historySummary by remember { mutableStateOf<String?>(null) }
@@ -48,15 +54,21 @@ fun BoardScreen(vm: BoardViewModel) {
         }
     }
 
-    val speechLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val spokenText = result.data
-                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-                ?.firstOrNull()
-            if (!spokenText.isNullOrBlank()) {
-                input = spokenText
+    val speechManager = remember { SpeechManager(context) }
+    val speechState by speechManager.state.collectAsState()
+
+    DisposableEffect(Unit) {
+        onDispose {
+            speechManager.destroyRecognizer()
+        }
+    }
+
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            speechManager.setLanguage(state.speechLanguage)
+            speechManager.startListening { spokenText ->
                 vm.submit(spokenText)
                 input = ""
             }
@@ -97,15 +109,15 @@ fun BoardScreen(vm: BoardViewModel) {
                     FilterChipItem(
                         selected = state.selectedSortOrder == SortOrder.RANK,
                         onClick = { vm.setSortOrder(SortOrder.RANK) },
-                        label = "\u26a1 Rank"
+                        label = "⚡ Rank"
                     )
                     FilterChipItem(
                         selected = state.selectedSortOrder == SortOrder.DATE,
                         onClick = { vm.setSortOrder(SortOrder.DATE) },
-                        label = "\ud83d\udcc5 Date"
+                        label = "📅 Date"
                     )
 
-                    Text("\u2502", color = BoardInk.copy(alpha = 0.4f), fontSize = 12.sp)
+                    Text("│", color = BoardInk.copy(alpha = 0.4f), fontSize = 12.sp)
 
                     // Class Filters
                     FilterChipItem(
@@ -121,7 +133,7 @@ fun BoardScreen(vm: BoardViewModel) {
                         )
                     }
 
-                    Text("\u2502", color = BoardInk.copy(alpha = 0.4f), fontSize = 12.sp)
+                    Text("│", color = BoardInk.copy(alpha = 0.4f), fontSize = 12.sp)
 
                     // Availability Filters
                     FilterChipItem(
@@ -145,7 +157,7 @@ fun BoardScreen(vm: BoardViewModel) {
                         label = "WL"
                     )
 
-                    Text("\u2502", color = BoardInk.copy(alpha = 0.4f), fontSize = 12.sp)
+                    Text("│", color = BoardInk.copy(alpha = 0.4f), fontSize = 12.sp)
 
                     // Date Filters
                     FilterChipItem(
@@ -176,7 +188,7 @@ fun BoardScreen(vm: BoardViewModel) {
                         Text("No options match the selected filters.", color = BoardText, fontSize = 14.sp)
                     } else {
                         Text("AI-powered train search", color = BoardYellow, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                        Text("Ask for a trip in your own words.", color = BoardText, fontSize = 14.sp)
+                        Text("Type or speak a trip in your own words.", color = BoardText, fontSize = 14.sp)
                         Text("\"Rajasthan to Pune on 1 September, sleeper\"", color = Dim, fontSize = 12.sp)
                         Text("\"Jaipur to Pune tomorrow\"", color = Dim, fontSize = 12.sp)
                     }
@@ -193,88 +205,236 @@ fun BoardScreen(vm: BoardViewModel) {
             }
         }
 
-        // Bottom Input Bar
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .background(BoardInk)
-                .navigationBarsPadding()
-                .padding(14.dp, 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+        // Search Control Bar Container
+        Surface(
+            color = BoardSurface,
+            shadowElevation = 8.dp
         ) {
-            state.clarificationQuestion?.let { question ->
-                ClarificationBubble(question)
-            }
-
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            Column(
+                Modifier
+                    .navigationBarsPadding()
+                    .padding(12.dp)
             ) {
-                TextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    placeholder = { Text("Type a trip\u2026", color = Dim, fontSize = 14.sp) },
-                    singleLine = true,
-                    enabled = !state.busy,
-                    shape = CircleShape,
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = BoardSurface,
-                        unfocusedContainerColor = BoardSurface,
-                        disabledContainerColor = BoardSurface,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        disabledIndicatorColor = Color.Transparent
-                    ),
-                    trailingIcon = {
-                        IconButton(onClick = {
-                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN")
-                                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "hi-IN")
-                                putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
-                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Say your trip details in Hindi or English...")
-                                // +20% over the defaults so a natural mid-sentence pause doesn't cut the recognizer off early.
-                                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 7200L)
-                                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 4800L)
-                                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 3600L)
-                            }
-                            try {
-                                speechLauncher.launch(intent)
-                            } catch (_: Exception) {}
-                        }) {
-                            Icon(
-                                imageVector = Icons.Default.Mic,
-                                contentDescription = "Voice search",
-                                tint = BoardYellow,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    },
-                    modifier = Modifier.weight(1f)
-                )
-                Button(
-                    onClick = {
-                        vm.submit(input)
-                        input = ""
-                    },
-                    enabled = !state.busy && input.isNotBlank(),
-                    shape = CircleShape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = BoardYellow,
-                        contentColor = BoardInk,
-                        disabledContainerColor = BoardYellow.copy(alpha = 0.4f),
-                        disabledContentColor = BoardInk.copy(alpha = 0.4f)
-                    ),
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp)
+                // Speech Language Selector Chips
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(bottom = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = "AI Search",
-                        modifier = Modifier.size(18.dp)
+                    Text(
+                        "Speech Lang:",
+                        color = BoardText,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
                     )
-                    Spacer(Modifier.width(6.dp))
-                    Text("Go", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    SpeechLanguage.entries.forEach { lang ->
+                        FilterChipItem(
+                            selected = state.speechLanguage == lang,
+                            onClick = {
+                                vm.setSpeechLanguage(lang)
+                                speechManager.setLanguage(lang)
+                            },
+                            label = lang.displayName,
+                            onDarkSurface = true
+                        )
+                    }
+                }
+
+                // Active Voice Listening Banner Overlay
+                if (speechState.isListening) {
+                    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+                    val pulseScale by infiniteTransition.animateFloat(
+                        initialValue = 1.0f,
+                        targetValue = 1.25f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(600, easing = LinearEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "pulseScale"
+                    )
+                    val rmsScale = 1.0f + (speechState.rmsDb / 15f).coerceIn(0f, 0.4f)
+
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = Color(0xFF1E2838),
+                        border = BorderStroke(1.dp, BoardYellow.copy(alpha = 0.8f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = WlRed,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .scale(pulseScale * rmsScale)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Mic,
+                                        contentDescription = "Recording",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        "LISTENING",
+                                        color = WlRed,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = BoardYellow.copy(alpha = 0.2f)
+                                    ) {
+                                        Text(
+                                            state.speechLanguage.shortTag,
+                                            color = BoardYellow,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = speechState.partialText.ifBlank { "Speak your trip details (in Hindi or English)..." },
+                                    color = BoardText,
+                                    fontSize = 13.sp,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            IconButton(
+                                onClick = { speechManager.stopListening(submitPartialIfAvailable = true) },
+                                modifier = Modifier
+                                    .background(BoardYellow, CircleShape)
+                                    .size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Done,
+                                    contentDescription = "Done",
+                                    tint = BoardInk,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = { speechManager.cancelListening() },
+                                modifier = Modifier
+                                    .background(BoardInk.copy(alpha = 0.5f), CircleShape)
+                                    .size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Cancel",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Speech Error indicator if present
+                speechState.error?.let { err ->
+                    Text(
+                        text = err,
+                        color = WlRed,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(bottom = 4.dp, start = 4.dp)
+                    )
+                }
+
+                state.clarificationQuestion?.let { question ->
+                    ClarificationBubble(question)
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    TextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        placeholder = { Text("Type a trip…", color = Dim, fontSize = 14.sp) },
+                        singleLine = true,
+                        enabled = !state.busy,
+                        shape = CircleShape,
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = BoardSurface,
+                            unfocusedContainerColor = BoardSurface,
+                            disabledContainerColor = BoardSurface,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor = Color.Transparent
+                        ),
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                val hasPermission = ContextCompat.checkSelfPermission(
+                                    context, Manifest.permission.RECORD_AUDIO
+                                ) == PackageManager.PERMISSION_GRANTED
+
+                                if (hasPermission) {
+                                    if (speechState.isListening) {
+                                        speechManager.stopListening(submitPartialIfAvailable = true)
+                                    } else {
+                                        speechManager.setLanguage(state.speechLanguage)
+                                        speechManager.startListening { spokenText ->
+                                            vm.submit(spokenText)
+                                            input = ""
+                                        }
+                                    }
+                                } else {
+                                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
+                            }) {
+                                Icon(
+                                    imageVector = Icons.Default.Mic,
+                                    contentDescription = "Voice search",
+                                    tint = if (speechState.isListening) WlRed else BoardYellow,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    Button(
+                        onClick = {
+                            vm.submit(input)
+                            input = ""
+                        },
+                        enabled = !state.busy && input.isNotBlank(),
+                        shape = CircleShape,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = BoardYellow,
+                            contentColor = BoardInk,
+                            disabledContainerColor = BoardYellow.copy(alpha = 0.4f),
+                            disabledContentColor = BoardInk.copy(alpha = 0.4f)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = "AI Search",
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text("Go", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
                 }
             }
         }
@@ -299,12 +459,29 @@ fun BoardScreen(vm: BoardViewModel) {
 }
 
 @Composable
-private fun FilterChipItem(selected: Boolean, onClick: () -> Unit, label: String) {
+private fun FilterChipItem(
+    selected: Boolean,
+    onClick: () -> Unit,
+    label: String,
+    onDarkSurface: Boolean = false
+) {
+    val bgColor = when {
+        selected -> if (onDarkSurface) BoardYellow else BoardInk
+        onDarkSurface -> BoardInk.copy(alpha = 0.6f)
+        else -> BoardInk.copy(alpha = 0.12f)
+    }
+    val textColor = when {
+        selected -> if (onDarkSurface) BoardInk else BoardYellow
+        onDarkSurface -> BoardText
+        else -> BoardInk
+    }
+
     Surface(
         onClick = onClick,
         shape = CircleShape,
-        color = if (selected) BoardInk else BoardInk.copy(alpha = 0.12f),
-        contentColor = if (selected) BoardYellow else BoardInk
+        color = bgColor,
+        contentColor = textColor,
+        border = if (onDarkSurface && !selected) BorderStroke(1.dp, Rule) else null
     ) {
         Text(
             text = label,
@@ -400,7 +577,7 @@ private fun BoardCard(row: ResultRow, top: Boolean) {
                     )
                 }
                 row.fare?.let {
-                    Text("\u20b9$it", color = BoardText, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text("₹$it", color = BoardText, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 }
             }
 
@@ -410,7 +587,7 @@ private fun BoardCard(row: ResultRow, top: Boolean) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "${row.fromStnCode}  \u279c  ${row.toStnCode}",
+                    text = "${row.fromStnCode}  ➜  ${row.toStnCode}",
                     color = BoardYellow,
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
@@ -442,7 +619,7 @@ private fun BoardCard(row: ResultRow, top: Boolean) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "${row.departureTime}  \u2192  ${row.arrivalTime}  \u00b7  ${row.travelClass}",
+                    "${row.departureTime}  →  ${row.arrivalTime}  ·  ${row.travelClass}",
                     color = Dim,
                     fontSize = 12.sp
                 )
