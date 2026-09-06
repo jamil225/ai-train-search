@@ -35,7 +35,8 @@ data class BoardState(
     val selectedClassFilter: String? = null,
     val selectedSortOrder: SortOrder = SortOrder.RANK,
     /** Set when the agent needs more information; shown as a conversational prompt, not an error. */
-    val clarificationQuestion: String? = null
+    val clarificationQuestion: String? = null,
+    val speechLanguage: SpeechLanguage = SpeechLanguage.AUTO
 ) {
     val visibleRows: List<ResultRow>
         get() {
@@ -98,16 +99,21 @@ class BoardViewModel(
         _state.value = _state.value.copy(selectedSortOrder = sortOrder)
     }
 
+    fun setSpeechLanguage(lang: SpeechLanguage) {
+        _state.value = _state.value.copy(speechLanguage = lang)
+    }
+
     fun submit(sentence: String) {
         val trimmed = sentence.trim()
         if (trimmed.isBlank() || _state.value.busy) return
 
         // The user's reply might be answering a pending clarification rather than a brand new
-        // search \u2014 either way `Search.run` sends full context, so no special-casing is needed here.
+        // search — either way `Search.run` sends full context, so no special-casing is needed here.
         _state.value = BoardState(
             busy = true,
             progressLabel = "Reading your trip",
-            clarificationQuestion = null
+            clarificationQuestion = null,
+            speechLanguage = _state.value.speechLanguage
         )
 
         viewModelScope.launch {
@@ -122,24 +128,31 @@ class BoardViewModel(
                             BoardState(
                                 busy = false,
                                 rows = event.rows,
-                                heading = "${event.origin.uppercase()} \u2192 ${event.destination.uppercase()}",
-                                subheading = "$datesRange \u00b7 ${event.rows.size} options"
+                                heading = "${event.origin.uppercase()} → ${event.destination.uppercase()}",
+                                subheading = "$datesRange · ${event.rows.size} options",
+                                speechLanguage = _state.value.speechLanguage
                             )
                         }
-                        is SearchEvent.Failed -> BoardState(busy = false, error = event.message)
+                        is SearchEvent.Failed -> BoardState(
+                            busy = false,
+                            error = event.message,
+                            speechLanguage = _state.value.speechLanguage
+                        )
                         is SearchEvent.Clarify -> BoardState(
                             busy = false,
-                            clarificationQuestion = event.question
+                            clarificationQuestion = event.question,
+                            speechLanguage = _state.value.speechLanguage
                         )
                     }
                 }
             } catch (e: Exception) {
-                // Safety net for anything unexpected below Search's own error handling \u2014 e.g. a
-                // database failure \u2014 so the app shows an error instead of silently hanging or crashing.
+                // Safety net for anything unexpected below Search's own error handling — e.g. a
+                // database failure — so the app shows an error instead of silently hanging or crashing.
                 AppLogger.error("BoardViewModel", "Unhandled failure while running search for: \"$trimmed\"", e)
                 _state.value = BoardState(
                     busy = false,
-                    error = "Something went wrong. Please try again."
+                    error = "Something went wrong. Please try again.",
+                    speechLanguage = _state.value.speechLanguage
                 )
             }
         }
